@@ -1,0 +1,33 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Local archives and compose backups
+*.zip
+docker-compose.backup.yml
+docker-compose.*.backup.yml
+docker-compose.before-*.yml
+docker-compose.before-*.yaml
+
+# Local test output
+test-results/
+debezium/source-connector.json

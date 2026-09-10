@@ -1,0 +1,62 @@
+input:
+  kafka_franz:
+    seed_brokers:
+      - redpanda:9092
+    topics:
+      - shop.public.orders
+    consumer_group: orders-replica-sink
+    start_from_oldest: true
+    commit_period: 1s
+
+pipeline:
+  processors:
+    - mapping: |
+        root = this.payload
+
+output:
+  sql_raw:
+    driver: postgres
+    dsn: postgres://postgres:postgres@replica-postgres:5432/replica_db?sslmode=disable
+    max_in_flight: 1
+    queries:
+      - when: 'root = this.op == "d"'
+        query: |
+          DELETE FROM public.orders
+          WHERE id = $1
+        args_mapping: |
+          root = [
+            this.before.id
+          ]
+
+      - when: 'root = this.op == "c" || this.op == "r" || this.op == "u"'
+        query: |
+          INSERT INTO public.orders (
+            id,
+            customer_name,
+            amount,
+            status,
+            updated_at,
+            replicated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+          ON CONFLICT (id)
+          DO UPDATE SET
+            customer_name = EXCLUDED.customer_name,
+            amount = EXCLUDED.amount,
+            status = EXCLUDED.status,
+            updated_at = EXCLUDED.updated_at,
+            replicated_at = CURRENT_TIMESTAMP
+        args_mapping: |
+          root = [
+            this.after.id,
+            this.after.customer_name,
+            this.after.amount,
+            this.after.status,
+            this.after.updated_at
+          ]
+
+metrics:
+  prometheus:
+    use_histogram_timing: true
+    add_process_metrics: true
+    add_go_metrics: true

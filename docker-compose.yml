@@ -1,0 +1,227 @@
+services:
+  source-postgres:
+    image: postgres:16
+    container_name: cdc-source-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: source_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    ports:
+      - "5433:5432"
+    volumes:
+      - source_data:/var/lib/postgresql/data
+      - ./source-db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./source-db/observability.sql:/docker-entrypoint-initdb.d/02-observability.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d source_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  replica-postgres:
+    image: postgres:16
+    container_name: cdc-replica-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: replica_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - replica_data:/var/lib/postgresql/data
+      - ./replica-db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./replica-db/observability.sql:/docker-entrypoint-initdb.d/02-observability.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d replica_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
+    container_name: cdc-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr
+      - redpanda:33145
+      - --advertise-rpc-addr
+      - redpanda:33145
+      - --mode
+      - dev-container
+      - --smp
+      - "1"
+      - --default-log-level=info
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  redpanda-config:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
+    container_name: cdc-redpanda-config
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        rpk cluster config set enable_consumer_group_metrics '["group","partition","consumer_lag"]' -X admin.hosts=redpanda:9644
+        rpk cluster config set consumer_group_lag_collection_interval_sec 5 -X admin.hosts=redpanda:9644
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  debezium:
+    image: quay.io/debezium/connect:3.6.2.Final
+    container_name: cdc-debezium
+    restart: unless-stopped
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: "1"
+
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_status
+
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    ports:
+      - "8083:8083"
+    depends_on:
+      source-postgres:
+        condition: service_healthy
+      redpanda-config:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl --fail --silent http://localhost:8083/connectors > /dev/null || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  connector-init:
+    image: quay.io/debezium/connect:3.6.2.Final
+    container_name: cdc-connector-init
+    restart: "no"
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        curl --fail --silent --show-error \
+          --request PUT \
+          --header 'Content-Type: application/json' \
+          --data-binary '@/config/source-connector-config.json' \
+          http://debezium:8083/connectors/orders-source-connector/config
+    volumes:
+      - ./debezium/source-connector-config.json:/config/source-connector-config.json:ro
+    depends_on:
+      debezium:
+        condition: service_healthy
+
+  sink:
+    image: docker.redpanda.com/redpandadata/connect:4.108.0
+    container_name: cdc-sink
+    restart: unless-stopped
+    command:
+      - run
+      - /connect.yaml
+    ports:
+      - "4195:4195"
+    volumes:
+      - ./sink/sink.yaml:/connect.yaml:ro
+    depends_on:
+      redpanda-config:
+        condition: service_completed_successfully
+      replica-postgres:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cdc-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      sink:
+        condition: service_started
+      cdc-metrics:
+        condition: service_started
+
+  cdc-metrics:
+    build:
+      context: ./metrics
+    container_name: cdc-metrics
+    restart: unless-stopped
+    environment:
+      SOURCE_DSN: postgresql://postgres:postgres@source-postgres:5432/source_db
+      REPLICA_DSN: postgresql://postgres:postgres@replica-postgres:5432/replica_db
+      DEBEZIUM_STATUS_URL: http://debezium:8083/connectors/orders-source-connector/status
+      POLL_INTERVAL_SECONDS: "5"
+    ports:
+      - "8000:8000"
+    depends_on:
+      source-postgres:
+        condition: service_healthy
+      replica-postgres:
+        condition: service_healthy
+      debezium:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cdc-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  source_data:
+  replica_data:
+  redpanda_data:
+  prometheus_data:
+  grafana_data:
