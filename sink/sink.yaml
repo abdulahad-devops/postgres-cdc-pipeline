@@ -21,11 +21,37 @@ output:
     queries:
       - when: 'root = this.op == "d"'
         query: |
-          DELETE FROM public.orders
-          WHERE id = $1
+          INSERT INTO public.cdc_protected_deletes (
+            source_table,
+            order_id,
+            deleted_customer_name,
+            deleted_amount,
+            deleted_status,
+            deleted_updated_at,
+            source_lsn,
+            source_event_timestamp
+          )
+          VALUES (
+            'public.orders',
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            to_timestamp($7::double precision / 1000.0)
+          )
+          ON CONFLICT (source_table, order_id, source_lsn)
+          DO NOTHING
         args_mapping: |
           root = [
-            this.before.id
+            this.before.id,
+            this.before.customer_name,
+            this.before.amount,
+            this.before.status,
+            this.before.updated_at,
+            this.source.lsn,
+            this.ts_ms
           ]
 
       - when: 'root = this.op == "c" || this.op == "r" || this.op == "u"'

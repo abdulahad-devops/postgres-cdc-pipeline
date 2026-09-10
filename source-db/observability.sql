@@ -14,3 +14,7 @@ CREATE TRIGGER orders_set_updated_at
 BEFORE UPDATE ON public.orders
 FOR EACH ROW
 EXECUTE FUNCTION public.set_orders_updated_at();
+
+-- Include the complete old row in PostgreSQL DELETE events so the protected
+-- replica can record exactly what was removed from the source.
+ALTER TABLE public.orders REPLICA IDENTITY FULL;

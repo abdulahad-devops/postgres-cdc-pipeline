@@ -1,0 +1,27 @@
+{
+  "name": "orders-source-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "source-postgres",
+    "database.port": "5432",
+    "database.user": "cdc_user",
+    "database.password": "cdc_password",
+    "database.dbname": "source_db",
+
+    "topic.prefix": "shop",
+    "plugin.name": "pgoutput",
+
+    "slot.name": "orders_cdc_slot",
+    "publication.name": "orders_publication",
+    "publication.autocreate.mode": "disabled",
+
+    "schema.include.list": "public",
+    "table.include.list": "public.orders",
+
+    "snapshot.mode": "initial",
+    "decimal.handling.mode": "double",
+    "tombstones.on.delete": "false"
+  }
+}

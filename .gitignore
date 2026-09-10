@@ -30,4 +30,8 @@ docker-compose.before-*.yaml
 
 # Local test output
 test-results/
-debezium/source-connector.json
+
+# Generated PostgreSQL backup archives
+backups/*.dump
+backups/*.dump.part
+!backups/.gitkeep

@@ -4,6 +4,14 @@ lowercaseOutputName: false
 lowercaseOutputLabelNames: false
 
 rules:
+  - pattern: "kafka.connect<type=connect-worker-metrics>([^:]+):"
+    name: "kafka_connect_worker_metrics_$1"
+
+  - pattern: "kafka.connect<type=connect-metrics, client-id=([^:]+)><>([^:]+)"
+    name: "kafka_connect_metrics_$2"
+    labels:
+      client: "$1"
+
   - pattern: "debezium.([^:]+)<type=connector-metrics, context=([^,]+), server=([^,]+), key=([^>]+)><>RowsScanned"
     name: "debezium_metrics_RowsScanned"
     labels:

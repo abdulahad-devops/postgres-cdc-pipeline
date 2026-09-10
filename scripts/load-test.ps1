@@ -51,31 +51,39 @@ FROM generate_series(1, $currentBatchSize) AS generated_id;
 Write-Host "Writes finished. Waiting for the replica to catch up..."
 
 $deadline = (Get-Date).AddSeconds(120)
+$sourceCount = $insertedRows
+$replicaCount = 0
 
 do {
-    $metricLine = curl.exe -s http://localhost:8000/metrics |
-        Select-String -Pattern "^cdc_orders_row_count_difference "
+    $replicaResult = docker compose exec -T replica-postgres psql `
+        -X `
+        -qAt `
+        -v ON_ERROR_STOP=1 `
+        -U postgres `
+        -d replica_db `
+        -c "SELECT COUNT(*) FROM public.orders WHERE customer_name LIKE 'Load-$runId-%';"
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not read CDC consistency metric."
+        throw "Could not count this load-test run in the replica."
     }
 
-    if ($null -eq $metricLine) {
-        throw "CDC consistency metric was not found."
-    }
+    $replicaCount = [int](
+        $replicaResult |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Last 1
+    )
 
-    $difference = [double](($metricLine.Line -split "\s+")[1])
-    Write-Host "Current source/replica row difference: $difference"
+    Write-Host "Current run replicated: $replicaCount / $sourceCount rows"
 
-    if ([double]$difference -eq 0) {
+    if ($replicaCount -eq $sourceCount) {
         break
     }
 
     Start-Sleep -Seconds 2
 } while ((Get-Date) -lt $deadline)
 
-if ([double]$difference -ne 0) {
-    throw "Replica did not catch up within 120 seconds."
+if ($replicaCount -ne $sourceCount) {
+    throw "Replica did not receive every row from this load-test run within 120 seconds."
 }
 
-Write-Host "CDC load test passed. Replica caught up with no row-count difference."
+Write-Host "CDC load test passed. Replica received all $sourceCount rows from this run."

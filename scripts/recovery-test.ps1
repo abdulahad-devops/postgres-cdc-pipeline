@@ -125,7 +125,7 @@ RETURNING id;
     }
 
     $testPassed = $true
-    Write-Host "CDC recovery test passed: no event loss, no duplicate row, and matching content."
+    Write-Host "CDC recovery phase passed: no event loss, no duplicate row, and matching content."
 }
 finally {
     if ($sinkStopped) {
@@ -142,30 +142,53 @@ finally {
             -Database "source_db" `
             -Sql "WITH deleted AS (DELETE FROM public.orders WHERE id = $testId RETURNING 1) SELECT COUNT(*) FROM deleted;"
 
-        $cleanupDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $protectionDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $deleteAuditCount = 0
 
         do {
-            $remainingReplicaRows = [int](Invoke-PsqlScalar `
+            $deleteAuditCount = [int](Invoke-PsqlScalar `
                 -Service "replica-postgres" `
                 -Database "replica_db" `
-                -Sql "SELECT COUNT(*) FROM public.orders WHERE id = $testId;")
+                -Sql "SELECT COUNT(*) FROM public.cdc_protected_deletes WHERE order_id = $testId;")
 
-            if ($remainingReplicaRows -eq 0) {
+            if ($deleteAuditCount -gt 0) {
                 break
             }
 
             Start-Sleep -Seconds 2
-        } while ((Get-Date) -lt $cleanupDeadline)
+        } while ((Get-Date) -lt $protectionDeadline)
 
-        if ($remainingReplicaRows -ne 0) {
-            Write-Warning "Test passed, but cleanup did not reach the replica before timeout."
+        $protectedReplicaRows = [int](Invoke-PsqlScalar `
+            -Service "replica-postgres" `
+            -Database "replica_db" `
+            -Sql "SELECT COUNT(*) FROM public.orders WHERE id = $testId;")
+
+        if ($deleteAuditCount -lt 1 -or $protectedReplicaRows -ne 1) {
+            Write-Warning "Recovery passed, but delete-protection verification did not complete before timeout."
+            $testPassed = $false
         }
         else {
-            Write-Host "Recovery-test data cleaned from source and replica."
+            Write-Host "Delete protection verified: source row removed, replica row retained, and audit recorded."
         }
+
+        Write-Host "Removing temporary test data directly from the protected replica..."
+
+        $null = Invoke-PsqlScalar `
+            -Service "replica-postgres" `
+            -Database "replica_db" `
+            -Sql "WITH deleted AS (DELETE FROM public.orders WHERE id = $testId RETURNING 1) SELECT COUNT(*) FROM deleted;"
+
+        $null = Invoke-PsqlScalar `
+            -Service "replica-postgres" `
+            -Database "replica_db" `
+            -Sql "WITH deleted AS (DELETE FROM public.cdc_protected_deletes WHERE order_id = $testId RETURNING 1) SELECT COUNT(*) FROM deleted;"
+
+        Write-Host "Recovery-test data cleaned from source, protected replica, and delete audit."
     }
 }
 
 if (-not $testPassed) {
     exit 1
 }
+
+Write-Host "CDC recovery and delete-protection test passed."

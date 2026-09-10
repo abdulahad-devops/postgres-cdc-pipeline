@@ -1,8 +1,10 @@
-# PostgreSQL CDC Replication Pipeline
+# Delete-Protected PostgreSQL CDC and Backup Pipeline
 
-An end-to-end Change Data Capture (CDC) pipeline that continuously replicates row-level changes from a source PostgreSQL database to a replica PostgreSQL database.
+An end-to-end Change Data Capture (CDC) pipeline that continuously applies source inserts and updates to a replica PostgreSQL database while protecting replica rows from accidental source deletes. Source delete events are retained in a durable audit table instead of being executed against the replica.
 
-The pipeline captures PostgreSQL WAL changes with Debezium, publishes them to Redpanda, applies them to the replica with Redpanda Connect, and exposes operational metrics through Prometheus and Grafana.
+The pipeline captures PostgreSQL WAL changes with Debezium, publishes them to Redpanda, applies safe changes with Redpanda Connect, creates hourly `pg_dump` backups of the protected replica, and exposes operational metrics through Prometheus and Grafana.
+
+This design provides two recovery layers: a delete-protected archival replica for fast access to accidentally deleted rows, and timestamped dump files for restoring an earlier database state. It is still recommended to copy important dump files to separate or off-site storage because source, replica, and local backups on one computer do not protect against complete host failure.
 
 ## Architecture
 
@@ -11,7 +13,8 @@ flowchart TD
     A[Source PostgreSQL 16] -->|Logical WAL| B[Debezium Connector]
     B -->|CDC events| C[Redpanda topic]
     C -->|Consume events| D[Redpanda Connect Sink]
-    D -->|Upsert or delete| E[Replica PostgreSQL 16]
+    D -->|Upsert or audit delete| E[Protected Replica PostgreSQL 16]
+    E --> I[Hourly pg_dump backups]
     F[CDC Metrics Exporter] --> G[Prometheus]
     C --> G
     D --> G
@@ -24,13 +27,16 @@ The first release intentionally replicates only `public.orders`, keeping the foc
 
 - Captures inserts, updates, and deletes directly from PostgreSQL WAL.
 - Uses Redpanda as a Kafka-compatible event broker.
-- Applies idempotent upserts and deletes to the replica database.
+- Applies idempotent inserts and updates while retaining source-deleted rows in the replica.
+- Stores each protected delete in `public.cdc_protected_deletes` for durable audit and deduplication.
+- Detects whether the source and replica `orders` tables are present.
+- Creates an immediate backup on startup and then hourly replica backups with seven-day local retention.
 - Automatically configures Redpanda consumer-lag metrics.
 - Automatically creates or updates the Debezium connector.
 - Preserves data and connector offsets in Docker volumes.
 - Exposes database, direct Debezium JMX, connector, replication-slot, lag, throughput, error, and latency metrics.
 - Automatically provisions the Prometheus data source and Grafana dashboard.
-- Includes PowerShell sustained-load and sink-recovery tests.
+- Includes PowerShell sustained-load, sink-recovery/delete-protection, and backup-restore tests.
 - Starts the complete stack with one Docker Compose command.
 
 ## Technology Stack
@@ -51,6 +57,8 @@ The first release intentionally replicates only `public.orders`, keeping the foc
 
 ```text
 postgres-cdc-pipeline/
+|-- backups/
+|   `-- replica_YYYYMMDDTHHMMSSZ.dump
 |-- debezium/
 |   |-- Dockerfile
 |   |-- jmx-exporter.yml
@@ -71,6 +79,7 @@ postgres-cdc-pipeline/
 |   |-- init.sql
 |   `-- observability.sql
 |-- scripts/
+|   |-- backup-restore-test.ps1
 |   |-- load-test.ps1
 |   `-- recovery-test.ps1
 |-- sink/
@@ -105,8 +114,9 @@ Docker Compose will:
 3. Start Redpanda and enable consumer-group lag metrics.
 4. Build and start Debezium with direct JMX metrics, then automatically register the source connector.
 5. Start the Redpanda Connect sink.
-6. Start the custom CDC metrics exporter.
-7. Start Prometheus and provision Grafana.
+6. Create an immediate protected-replica backup and schedule hourly backups.
+7. Start the custom CDC protection and backup metrics exporter.
+8. Start Prometheus and provision Grafana.
 
 Check every service, including the one-shot initialization containers:
 
@@ -182,6 +192,15 @@ docker compose exec source-postgres psql -U postgres -d source_db -c "DELETE FRO
 docker compose exec replica-postgres psql -U postgres -d replica_db -c "SELECT * FROM orders WHERE id = 3;"
 ```
 
+The row should still exist in the protected replica. Confirm that the delete was audited:
+
+```powershell
+docker compose exec replica-postgres psql -U postgres -d replica_db -c "SELECT order_id, source_lsn, source_event_timestamp, protected_at FROM cdc_protected_deletes WHERE order_id = 3 ORDER BY audit_id DESC;"
+```
+
+The source table uses `REPLICA IDENTITY FULL`, so new delete audit records also
+contain the deleted customer's name, amount, status, and previous update time.
+
 Allow a few seconds between a source write and its replica check.
 
 ## Run the Sustained Load Test
@@ -195,26 +214,22 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\load-test.ps1 -TotalRows 
 A successful run ends with:
 
 ```text
-CDC load test passed. Replica caught up with no row-count difference.
+CDC load test passed. Replica received all 1000 rows from this run.
 ```
 
-## Verify Data Consistency
+## Verify Protected-Replica Consistency
 
-Run the following query against both databases:
+The protected replica can intentionally contain more rows than the source. Use the protection-aware metrics instead of requiring equal total row counts:
 
 ```powershell
-docker compose exec source-postgres psql -U postgres -d source_db -c "SELECT COUNT(*) AS rows, MD5(STRING_AGG(CONCAT_WS('|', id, customer_name, amount, status, updated_at), ',' ORDER BY id)) AS checksum FROM orders;"
+curl.exe -s http://localhost:8000/metrics | Select-String -Pattern "cdc_active_source_rows_missing_from_replica|cdc_active_source_rows_mismatched_in_replica|cdc_protected_replica_rows|cdc_protected_delete_events_total"
 ```
 
-```powershell
-docker compose exec replica-postgres psql -U postgres -d replica_db -c "SELECT COUNT(*) AS rows, MD5(STRING_AGG(CONCAT_WS('|', id, customer_name, amount, status, updated_at), ',' ORDER BY id)) AS checksum FROM orders;"
-```
-
-Matching row counts and checksums confirm that the replicated business data is identical.
+`missing` and `mismatched` should remain zero. `protected_replica_rows` and `protected_delete_events_total` increase when source deletes are safely retained in the replica.
 
 ## Test Sink Recovery
 
-The recovery test stops the sink, writes an event while it is offline, restarts it, and verifies that the replica receives exactly one row with matching content:
+The recovery test stops the sink, writes an event while it is offline, restarts it, verifies one matching replica row, then deletes the source test row and verifies that the replica row is protected and the delete is audited:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\recovery-test.ps1 -TimeoutSeconds 120
@@ -223,8 +238,18 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\recovery-test.ps1 -Timeou
 The script also restarts the sink in its cleanup block if a test step fails. A successful run ends with:
 
 ```text
-CDC recovery test passed: no event loss, no duplicate row, and matching content.
+CDC recovery and delete-protection test passed.
 ```
+
+## Test Backup Creation and Restore
+
+The backup service creates a custom-format dump immediately on startup and every hour. Run a real restore into a temporary test database:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\backup-restore-test.ps1 -TimeoutSeconds 90
+```
+
+A successful run creates a new dump, restores it, queries the restored `orders` table, and removes only the temporary `cdc_backup_restore_test` database.
 
 ## Monitoring
 
@@ -248,7 +273,13 @@ The provisioned dashboard includes:
 - Direct Debezium events captured per second
 - Direct Debezium lag behind the source
 - Replication-slot presence and WAL lag
-- Source/replica row-count difference
+- Source and replica `orders` table presence
+- Protected delete-event and retained-row counts
+- Active source rows missing from or mismatched in the replica
+- Raw row-count difference, which can be non-zero by design
+- Replica backup availability and latest backup age
+- Protected deletes grouped by source table
+- Latest 100 protected deletes with deleted row details
 - End-to-end replication latency
 - Topic message and byte throughput
 
@@ -264,6 +295,14 @@ cdc_replication_slot_lag_bytes
 cdc_source_orders_rows
 cdc_replica_orders_rows
 cdc_orders_row_count_difference
+cdc_source_orders_table_present
+cdc_replica_orders_table_present
+cdc_protected_delete_events_total
+cdc_protected_replica_rows
+cdc_active_source_rows_missing_from_replica
+cdc_active_source_rows_mismatched_in_replica
+cdc_backup_present
+cdc_last_backup_age_seconds
 cdc_end_to_end_latency_seconds
 ```
 
@@ -297,18 +336,21 @@ docker compose down -v
 
 > Warning: `docker compose down -v` permanently deletes the local project data.
 
+The timestamped files in `./backups` are bind-mounted host files and are not removed by `docker compose down -v`. Keep at least one verified copy on another disk or remote storage because deleting the project folder or losing the host disk can still remove these local backups.
+
 ## Verified Results
 
 This implementation has been practically verified with:
 
-- Live insert, update, and delete replication.
-- Sink stop/restart recovery without data loss or duplicate primary keys.
+- Live insert and update replication plus protected source-delete auditing.
+- Sink stop/restart recovery without data loss or duplicate primary keys, followed by delete-protection verification.
 - Full Compose restart with persistent data and connector offsets.
 - A clean installation using fresh Docker volumes and one startup command.
-- A sustained 1,000-row load test that reached zero source/replica row-count difference.
-- Exact equality after the load test: `1005` rows in each database with matching checksum `403e714748df75e7f7c27a50596e15cb`.
+- A sustained 1,000-row load test that verified all rows from that run reached the replica.
+- Protection-aware checks for missing and mismatched active source rows.
+- Timestamped custom-format replica dumps plus an automated restore test into a temporary database.
 - Measured end-to-end latency of approximately `0.757 seconds` for a test event.
-- Live Grafana panels for consumer lag, throughput, WAL lag, health, and end-to-end latency.
+- Live Grafana panels for consumer lag, throughput, WAL lag, health, protected deletes, table presence, backup freshness, and end-to-end latency.
 
 ## Design Note
 
@@ -316,7 +358,7 @@ The original requirement describes Redpanda Connect running the Debezium Postgre
 
 ## Current Scope
 
-This phase deliberately does not include transformations, multiple sinks, alerting rules, chaos testing, or custom schema-evolution handling. Those are suitable follow-up improvements after the base pipeline.
+This phase deliberately does not include transformations, multiple sinks, alerting rules, full DDL replication, or custom schema-evolution handling. A dropped source `orders` table is detected by monitoring and is not dropped from the replica. Local dump files should be copied to separate or off-site storage for protection from complete host or disk loss.
 
 ## Author
 

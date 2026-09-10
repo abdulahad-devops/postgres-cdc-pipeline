@@ -8,3 +8,18 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: true
+
+  - name: Replica PostgreSQL
+    uid: replica-postgres
+    type: postgres
+    access: proxy
+    url: replica-postgres:5432
+    user: postgres
+    secureJsonData:
+      password: postgres
+    jsonData:
+      database: replica_db
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    editable: false

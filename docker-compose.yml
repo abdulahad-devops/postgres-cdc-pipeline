@@ -201,14 +201,49 @@ services:
       REPLICA_DSN: postgresql://postgres:postgres@replica-postgres:5432/replica_db
       DEBEZIUM_STATUS_URL: http://debezium:8083/connectors/orders-source-connector/status
       POLL_INTERVAL_SECONDS: "5"
+      BACKUP_DIR: /backups
     ports:
       - "8000:8000"
+    volumes:
+      - ./backups:/backups:ro
     depends_on:
       source-postgres:
         condition: service_healthy
       replica-postgres:
         condition: service_healthy
       debezium:
+        condition: service_healthy
+
+  backup:
+    image: postgres:16
+    container_name: cdc-backup
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: postgres
+      BACKUP_INTERVAL_SECONDS: "3600"
+      BACKUP_RETENTION_DAYS: "7"
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        mkdir -p /backups
+        create_backup() {
+          stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+          temporary="/backups/replica_$${stamp}.dump.part"
+          final="/backups/replica_$${stamp}.dump"
+          pg_dump -h replica-postgres -U postgres -d replica_db -Fc -f "$${temporary}"
+          mv "$${temporary}" "$${final}"
+          find /backups -type f -name 'replica_*.dump' -mtime +$${BACKUP_RETENTION_DAYS} -delete
+          echo "Created backup: $${final}"
+        }
+        create_backup
+        while true; do
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+          create_backup
+        done
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      replica-postgres:
         condition: service_healthy
 
   grafana:
