@@ -92,7 +92,12 @@ services:
         condition: service_healthy
 
   debezium:
-    image: quay.io/debezium/connect:3.6.2.Final
+    build:
+      context: ./debezium
+      args:
+        DEBEZIUM_VERSION: 3.6.2.Final
+        JMX_EXPORTER_VERSION: 1.0.0
+    image: postgres-cdc-pipeline-debezium:3.6.2-jmx
     container_name: cdc-debezium
     restart: unless-stopped
     environment:
@@ -111,8 +116,11 @@ services:
       VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      KAFKA_OPTS: >-
+        -javaagent:/kafka/etc/jmx_prometheus_javaagent.jar=9404:/kafka/etc/jmx-exporter.yml
     ports:
       - "8083:8083"
+      - "9404:9404"
     depends_on:
       source-postgres:
         condition: service_healthy

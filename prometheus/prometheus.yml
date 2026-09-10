@@ -15,6 +15,12 @@ scrape_configs:
       - targets:
           - sink:4195
 
+  - job_name: debezium
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - debezium:9404
+
   - job_name: cdc-metrics
     metrics_path: /metrics
     static_configs:
