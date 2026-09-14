@@ -1,0 +1,52 @@
+services:
+  control-postgres:
+    image: postgres:16
+    container_name: cdc-control-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cdc_control
+      POSTGRES_USER: cdc_control
+      POSTGRES_PASSWORD: ${CONTROL_POSTGRES_PASSWORD:?CONTROL_POSTGRES_PASSWORD is required}
+    volumes:
+      - control_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdc_control -d cdc_control"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - default
+
+  control-plane:
+    build:
+      context: ./control-plane
+    container_name: cdc-control-plane
+    restart: unless-stopped
+    environment:
+      CONTROL_DATABASE_URL: postgresql://cdc_control:${CONTROL_POSTGRES_PASSWORD}@control-postgres:5432/cdc_control
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY is required}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+      ALLOW_PRIVATE_DATABASES: ${ALLOW_PRIVATE_DATABASES:-false}
+      SECRETS_BACKEND: ${SECRETS_BACKEND:-fernet}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_SECRET_PREFIX: ${AWS_SECRET_PREFIX:-postgres-cdc}
+      DEBEZIUM_URL: http://debezium:8083
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      control-postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      debezium:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  prometheus:
+    volumes:
+      - ./prometheus/prometheus.saas.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  control_postgres_data:
