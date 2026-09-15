@@ -128,7 +128,7 @@ def _mirror(message) -> None:
             Jsonb(record_key), Jsonb(record_data), operation == "d", source_lsn, event_id,
             operation == "d",
         )
-        control.execute(
+        mirrored = control.execute(
             """
             INSERT INTO replica_records (
                 connection_id, tenant_id, schema_name, table_name, key_hash,
@@ -139,17 +139,19 @@ def _mirror(message) -> None:
             DO UPDATE SET
                 record_key = EXCLUDED.record_key,
                 record_data = CASE
-                    WHEN EXCLUDED.is_deleted AND EXCLUDED.record_data = '{}'::jsonb
-                    THEN replica_records.record_data ELSE EXCLUDED.record_data END,
+                    WHEN EXCLUDED.is_deleted THEN replica_records.record_data
+                    ELSE EXCLUDED.record_data
+                END,
                 is_deleted = EXCLUDED.is_deleted,
                 source_lsn = EXCLUDED.source_lsn,
                 last_event_id = EXCLUDED.last_event_id,
                 replicated_at = now(),
                 deleted_at = CASE WHEN EXCLUDED.is_deleted THEN now() ELSE NULL END
             WHERE replica_records.last_event_id <> EXCLUDED.last_event_id
+            RETURNING record_data
             """,
             params,
-        )
+        ).fetchone()
         if operation == "d":
             control.execute(
                 """
@@ -161,7 +163,9 @@ def _mirror(message) -> None:
                 """,
                 (
                     event_id, connection["id"], connection["tenant_id"], schema_name, table_name,
-                    Jsonb(record_key), Jsonb(record_data), source_lsn,
+                    Jsonb(record_key),
+                    Jsonb(mirrored["record_data"] if mirrored else record_data),
+                    source_lsn,
                 ),
             )
         control.commit()
