@@ -32,6 +32,7 @@ The MVP accepts cloud PostgreSQL/RDS, not a PostgreSQL instance running on a cus
 
 - PostgreSQL logical replication must be enabled (wal_level=logical; on RDS use a parameter group with rds.logical_replication=1 and reboot).
 - The database must be reachable from the EC2 service. Prefer an RDS security-group rule whose source is the EC2 security group.
+- For a private RDS endpoint, keep `ALLOW_PRIVATE_DATABASES=false` and add only the trusted endpoint to `PRIVATE_DATABASE_HOST_ALLOWLIST`. Use comma-separated exact hostnames when onboarding more than one approved private database.
 - SSL is required by the portal.
 - Every selected table must have a primary key.
 - Use a dedicated service role. Never enter an AWS master or PostgreSQL superuser account into the portal.
@@ -78,6 +79,7 @@ APP_ENCRYPTION_KEY="$(openssl rand -hex 48)"
   echo "COOKIE_SECURE=true"
   echo "ALLOWED_HOSTS=*"
   echo "ALLOW_PRIVATE_DATABASES=false"
+  echo "PRIVATE_DATABASE_HOST_ALLOWLIST=your-db.cluster-id.ap-south-1.rds.amazonaws.com"
 } > .env.saas
 
 unset CONTROL_POSTGRES_PASSWORD APP_SECRET APP_ENCRYPTION_KEY
