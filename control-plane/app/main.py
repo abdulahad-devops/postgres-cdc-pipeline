@@ -1,7 +1,5 @@
-import ipaddress
 import logging
 import os
-import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -32,6 +30,7 @@ from .security import (
     COOKIE_SECURE,
     csrf_token,
     current_identity,
+    ensure_database_host_allowed,
     ensure_security_config,
     hash_password,
     issue_session,
@@ -42,7 +41,6 @@ from .security import (
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
-ALLOW_PRIVATE_DATABASES = os.getenv("ALLOW_PRIVATE_DATABASES", "false").lower() == "true"
 
 
 class RegisterBody(BaseModel):
@@ -138,24 +136,6 @@ def selected_table(connection_id: UUID, tenant_id: UUID, schema_name: str, table
     if not selected:
         raise HTTPException(403, "This table is not enabled for the portal")
     return connection, selected
-
-
-def ensure_public_database_host(host: str) -> None:
-    if ALLOW_PRIVATE_DATABASES:
-        return
-    try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(host, None)}
-    except socket.gaierror as exc:
-        raise HTTPException(422, "Database hostname could not be resolved") from exc
-    if not addresses:
-        raise HTTPException(422, "Database hostname could not be resolved")
-    for raw in addresses:
-        ip = ipaddress.ip_address(raw)
-        if not ip.is_global:
-            raise HTTPException(
-                422,
-                "Private, loopback and link-local database addresses are disabled for this deployment",
-            )
 
 
 def safe_database_error(exc: Exception) -> HTTPException:
@@ -267,7 +247,7 @@ def list_connections(ids: tuple[UUID, UUID] = Depends(identity)):
 @app.post("/api/connections")
 def create_connection(body: ConnectionBody, ids: tuple[UUID, UUID] = Depends(mutation_identity)):
     _, tenant_id = ids
-    ensure_public_database_host(body.host)
+    ensure_database_host_allowed(body.host)
     draft = body.model_dump(exclude={"password"})
     try:
         probe = test_connection(draft, body.password)
