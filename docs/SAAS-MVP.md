@@ -35,6 +35,7 @@ The MVP accepts cloud PostgreSQL/RDS, not a PostgreSQL instance running on a cus
 - For a private RDS endpoint, keep `ALLOW_PRIVATE_DATABASES=false` and add only the trusted endpoint to `PRIVATE_DATABASE_HOST_ALLOWLIST`. Use comma-separated exact hostnames when onboarding more than one approved private database.
 - SSL is required by the portal.
 - Every selected table must have a primary key.
+- Prefer `REPLICA IDENTITY FULL` on selected tables when complete PostgreSQL before-images are required. The protected replica still retains its last mirrored row on deletes.
 - Use a dedicated service role. Never enter an AWS master or PostgreSQL superuser account into the portal.
 - The Debezium role needs LOGIN, logical replication permission, CONNECT, schema USAGE, table SELECT, and enough ownership/CREATE privilege to create and maintain the filtered publication.
 - Add INSERT, UPDATE, DELETE, and sequence privileges only because this selected MVP includes CRUD.
