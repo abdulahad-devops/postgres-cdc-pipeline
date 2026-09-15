@@ -1,0 +1,65 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Tenant Events Received",
+      "id": 1,
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(increase(saas_cdc_events_received_total[$__range]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue"}]}, "unit": "short"}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true}
+    },
+    {
+      "type": "stat",
+      "title": "Written to Protected Replica",
+      "id": 2,
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(increase(saas_cdc_events_mirrored_total[$__range]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}]}, "unit": "short"}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true}
+    },
+    {
+      "type": "stat",
+      "title": "Processing Errors",
+      "id": 3,
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(increase(saas_cdc_event_errors_total[$__range]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "unit": "short"}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true}
+    },
+    {
+      "type": "stat",
+      "title": "Events Waiting",
+      "id": 4,
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "clamp_min(sum(increase(saas_cdc_events_received_total[$__range])) - sum(increase(saas_cdc_events_mirrored_total[$__range])), 0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}, "unit": "short"}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true}
+    },
+    {
+      "type": "timeseries",
+      "title": "Tenant CDC Throughput",
+      "id": 5,
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "sum(rate(saas_cdc_events_received_total[1m]))", "legendFormat": "received", "refId": "A"},
+        {"expr": "sum(rate(saas_cdc_events_mirrored_total[1m]))", "legendFormat": "mirrored", "refId": "B"},
+        {"expr": "sum(rate(saas_cdc_event_errors_total[1m]))", "legendFormat": "errors", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "eps"}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "tags": ["cdc", "saas", "multi-tenant"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "title": "SaaS PostgreSQL CDC",
+  "uid": "saas-postgresql-cdc",
+  "version": 1
+}

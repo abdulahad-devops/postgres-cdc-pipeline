@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CDC Control Plane</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <span class="eyebrow">POSTGRESQL CDC</span>
+      <h1>Control Plane</h1>
+    </div>
+    <div id="identity" class="identity hidden">
+      <span id="who"></span>
+      <button id="logout" class="ghost">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="auth" class="auth-grid">
+      <form id="login-form" class="card">
+        <h2>Sign in</h2>
+        <label>Email<input name="email" type="email" required></label>
+        <label>Password<input name="password" type="password" required></label>
+        <button>Sign in</button>
+      </form>
+      <form id="register-form" class="card">
+        <h2>Create workspace</h2>
+        <label>Organization<input name="organization_name" required minlength="2"></label>
+        <label>Email<input name="email" type="email" required></label>
+        <label>Password<input name="password" type="password" required minlength="12"></label>
+        <small>Use at least 12 characters.</small>
+        <button>Create account</button>
+      </form>
+    </section>
+
+    <section id="workspace" class="hidden">
+      <div class="hero">
+        <div>
+          <span class="eyebrow">TENANT WORKSPACE</span>
+          <h2 id="org-name">Your databases</h2>
+          <p>Connect a cloud PostgreSQL database, choose tables, and manage rows safely.</p>
+        </div>
+        <button id="new-connection">+ Connect database</button>
+      </div>
+
+      <div id="flash" role="status"></div>
+      <div id="connection-form-wrap" class="card hidden">
+        <form id="connection-form">
+          <div class="form-title">
+            <h3>Cloud PostgreSQL connection</h3>
+            <button type="button" id="cancel-connection" class="ghost">Cancel</button>
+          </div>
+          <div class="form-grid">
+            <label>Display name<input name="name" placeholder="Production RDS" required></label>
+            <label>Hostname<input name="host" placeholder="database.x.rds.amazonaws.com" required></label>
+            <label>Port<input name="port" type="number" value="5432" required></label>
+            <label>Database<input name="database_name" required></label>
+            <label>Restricted CDC user<input name="database_user" required></label>
+            <label>Password<input name="password" type="password" required></label>
+            <label>SSL mode
+              <select name="sslmode">
+                <option value="require">require</option>
+                <option value="verify-full">verify-full</option>
+                <option value="verify-ca">verify-ca</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">The database must be reachable from this server and logical replication must be enabled.</p>
+          <button>Test and save</button>
+        </form>
+      </div>
+
+      <div class="layout">
+        <aside class="card">
+          <h3>Connections</h3>
+          <div id="connections" class="stack"></div>
+        </aside>
+
+        <section class="card content">
+          <div id="empty-state">
+            <h3>Select a connection</h3>
+            <p>Its tables and replication health will appear here.</p>
+          </div>
+          <div id="connection-detail" class="hidden">
+            <div class="detail-head">
+              <div><h3 id="connection-name"></h3><p id="connection-target"></p></div>
+              <button id="refresh">Refresh</button>
+            </div>
+            <div id="health" class="health-grid"></div>
+            <h4>Tables</h4>
+            <div id="tables" class="table-picker"></div>
+            <button id="save-tables">Enable selected tables</button>
+            <div id="data-area" class="hidden">
+              <div class="data-head">
+                <div>
+                  <h4 id="table-title"></h4>
+                  <div class="tabs">
+                    <button data-view="source" class="tab active">Source</button>
+                    <button data-view="replica" class="tab">Protected replica</button>
+                  </div>
+                </div>
+                <button id="add-row">+ Insert row</button>
+              </div>
+              <div class="table-scroll"><table id="rows"></table></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
