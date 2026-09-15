@@ -1,7 +1,9 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
+import socket
 import secrets
 import time
 from uuid import UUID
@@ -12,6 +14,37 @@ from fastapi import HTTPException, Request, status
 APP_SECRET = os.getenv("APP_SECRET", "")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "28800"))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+
+
+def ensure_database_host_allowed(host: str) -> None:
+    normalized_host = host.strip().rstrip(".").lower()
+    if not normalized_host:
+        raise HTTPException(422, "Database hostname is required")
+
+    allowlist = {
+        item.strip().rstrip(".").lower()
+        for item in os.getenv("PRIVATE_DATABASE_HOST_ALLOWLIST", "").split(",")
+        if item.strip()
+    }
+    if os.getenv("ALLOW_PRIVATE_DATABASES", "false").lower() == "true" or normalized_host in allowlist:
+        return
+
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(normalized_host, None)}
+    except socket.gaierror as exc:
+        raise HTTPException(422, "Database hostname could not be resolved") from exc
+    if not addresses:
+        raise HTTPException(422, "Database hostname could not be resolved")
+    for raw in addresses:
+        try:
+            address = ipaddress.ip_address(raw)
+        except ValueError as exc:
+            raise HTTPException(422, "Database hostname resolved to an invalid address") from exc
+        if not address.is_global:
+            raise HTTPException(
+                422,
+                "Private, loopback and link-local database addresses are disabled for this deployment",
+            )
 
 
 def ensure_security_config() -> None:
